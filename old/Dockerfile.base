@@ -1,0 +1,115 @@
+# Copyright (c) Jupyter Development Team.
+# Distributed under the terms of the Modified BSD License.
+ARG REGISTRY=quay.io
+ARG OWNER=jupyter
+ARG BASE_CONTAINER=jupyter_foundation
+FROM $BASE_CONTAINER
+
+LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
+
+# Fix: https://github.com/hadolint/hadolint/wiki/DL4006
+# Fix: https://github.com/koalaman/shellcheck/wiki/SC3014
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+USER root
+
+# Install all OS dependencies for the Server that starts
+# but lacks all features (e.g., download as all possible file formats)
+#RUN sed -i 's/us.archive.ubuntu.com/mirror.elice.io/g' /etc/apt/sources.list
+#RUN rm -rf /var/lib/apt/lists/* &&\
+#    apt-get clean && \
+#    apt-get upgrade apt && \
+#    until apt-get update --fix-missing; do echo trying again; done && \
+#    apt-get update -o Acquire::CompressionTypes::Order::=gz
+
+
+RUN apt-get update --yes && \
+    apt-get install --yes --no-install-recommends \
+    # - Add necessary fonts for matplotlib/seaborn
+    #   See https://github.com/jupyter/docker-stacks/pull/380 for details
+    fonts-liberation \
+    # - `pandoc` is used to convert notebooks to html files
+    #   it's not present in the aarch64 Ubuntu image, so we install it here
+    pandoc \
+    # - `run-one` - a wrapper script that runs no more
+    #   than one unique instance of some command with a unique set of arguments,
+    #   we use `run-one-constantly` to support the `RESTARTABLE` option
+    run-one  \
+    curl \
+    git \
+#    nano-tiny \
+    tzdata \
+    unzip \
+    vim \
+    # git-over-ssh
+    openssh-client \
+    cmake \
+    # `nbconvert` dependencies
+    # https://nbconvert.readthedocs.io/en/latest/install.html#installing-tex
+    texlive-xetex \
+    texlive-fonts-recommended \
+    texlive-plain-generic \
+    # Enable clipboard on Linux host systems
+    xclip \
+    libgl1-mesa-glx  \
+    build-essential  \
+    libssl-dev && \
+
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Provide password-less sudo to NB_USER
+RUN \
+    sed -i /etc/sudoers -re 's/^%sudo.*/%sudo ALL=(ALL:ALL) NOPASSWD: ALL/g' && \
+    sed -i /etc/sudoers -re 's/^root.*/root ALL=(ALL:ALL) NOPASSWD: ALL/g' && \
+    sed -i /etc/sudoers -re 's/^#includedir.*/## **Removed the include directive** ##"/g' && \
+    echo "${NB_USER} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers && \  
+    chmod g+w /etc/passwd
+
+#RUN update-alternatives --install /usr/bin/nano nano /bin/nano-tiny 10
+
+USER ${NB_UID}
+
+# Install JupyterLab, Jupyter Notebook, JupyterHub and NBClassic
+# Generate a Jupyter Server config
+# Cleanup temporary files
+# Correct permissions
+# Do all this in a single RUN command to avoid duplicating all of the
+# files across image layers when the permissions change
+WORKDIR /tmp
+RUN mamba install --yes \
+    'jupyterlab' \
+    'notebook' \
+    'jupyterhub' \
+    'nbclassic' && \
+    jupyter server --generate-config && \
+    mamba clean --all -f -y && \
+    npm cache clean --force && \
+    jupyter lab clean && \
+    rm -rf "/home/${NB_USER}/.cache/yarn" && \
+    fix-permissions "${CONDA_DIR}" && \
+    fix-permissions "/home/${NB_USER}"
+
+ENV JUPYTER_PORT=8888
+EXPOSE $JUPYTER_PORT
+
+# Configure container startup
+CMD ["start-notebook.py"]
+
+# Copy local files as late as possible to avoid cache busting
+COPY start-notebook.py start-notebook.sh start-singleuser.py start-singleuser.sh /usr/local/bin/
+COPY jupyter_server_config.py docker_healthcheck.py /etc/jupyter/
+
+# Fix permissions on /etc/jupyter as root
+USER root
+RUN fix-permissions /etc/jupyter/
+
+# HEALTHCHECK documentation: https://docs.docker.com/engine/reference/builder/#healthcheck
+# This healtcheck works well for `lab`, `notebook`, `nbclassic`, `server`, and `retro` jupyter commands
+# https://github.com/jupyter/docker-stacks/issues/915#issuecomment-1068528799
+HEALTHCHECK --interval=3s --timeout=1s --start-period=3s --retries=3 \
+    CMD /etc/jupyter/docker_healthcheck.py || exit 1
+
+# Switch back to jovyan to avoid accidental container runs as root
+USER ${NB_UID}
+
+WORKDIR "${HOME}"

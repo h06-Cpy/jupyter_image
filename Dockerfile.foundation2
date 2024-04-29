@@ -1,0 +1,108 @@
+# Use the official Ubuntu base image
+ARG ROOT_CONTAINER=nvidia/cuda:11.8.0-devel-ubuntu22.04
+FROM $ROOT_CONTAINER
+
+LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
+
+# Set bash as default shell, in safe mode
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+USER root
+
+# Install all OS dependencies for fully functional notebook server
+ENV DEBIAN_FRONTEND noninteractive
+RUN apt-get update --yes && \
+    apt-get upgrade --yes && \
+    apt-get install --yes --no-install-recommends \
+    bzip2 \
+    ca-certificates \
+    locales \
+    sudo \
+    tini \
+    wget \
+
+    fonts-liberation \
+    # - `pandoc` is used to convert notebooks to html files
+    #   it's not present in the aarch64 Ubuntu image, so we install it here
+    pandoc \
+    # - `run-one` - a wrapper script that runs no more
+    #   than one unique instance of some command with a unique set of arguments,
+    #   we use `run-one-constantly` to support the `RESTARTABLE` option
+    run-one  \
+    curl \
+    git \
+#    nano-tiny \
+    tzdata \
+    unzip \
+    vim \
+    # git-over-ssh
+    openssh-client \
+    cmake \
+    # `nbconvert` dependencies
+    # https://nbconvert.readthedocs.io/en/latest/install.html#installing-tex
+    texlive-xetex \
+    texlive-fonts-recommended \
+    texlive-plain-generic \
+    # Enable clipboard on Linux host systems
+    xclip \
+    libgl1-mesa-glx  \
+    build-essential  \
+    tree \
+    libssl-dev && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
+    echo "C.UTF-8 UTF-8" >> /etc/locale.gen && \
+    locale-gen
+
+# Set environment variables
+ENV CONDA_DIR=/opt/conda \
+    SHELL=/bin/bash \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    LANGUAGE=C.UTF-8
+ENV PATH="${CONDA_DIR}/bin:${PATH}" \
+    HOME="/root"
+
+# Adjust PATH for root environment
+RUN echo 'export PATH=$PATH' >> /root/.bashrc
+
+# Set work directory
+WORKDIR /root
+
+# Pin the Python version here, or set it to "default"
+ARG PYTHON_VERSION=3.11
+
+# Download and install Micromamba, and initialize the Conda prefix.
+COPY --chown=root:root initial-condarc "${CONDA_DIR}/.condarc"
+WORKDIR /tmp
+RUN set -x && \
+    wget --progress=dot:giga -O - \
+        "https://micro.mamba.pm/api/micromamba/linux-64/latest" | tar -xvj bin/micromamba && \
+    ./bin/micromamba install \
+        --root-prefix="${CONDA_DIR}" \
+        --prefix="${CONDA_DIR}" \
+        --yes \
+        'python=3.11' \
+        'mamba' \
+        'jupyter_core' && \
+    rm -rf /tmp/bin/ && \
+    mamba clean --all -f -y
+
+    
+# Copy any scripts or files you need
+COPY run-hooks.sh start.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/run-hooks.sh /usr/local/bin/start.sh
+
+# Set container entrypoint
+ENTRYPOINT ["tini", "-g", "--", "start.sh"]
+    
+# Setup directories for any startup hooks
+RUN mkdir /usr/local/bin/start-notebook.d && \
+    mkdir /usr/local/bin/before-notebook.d
+
+COPY 10activate-conda-env.sh /usr/local/bin/before-notebook.d/
+
+RUN echo "eval \"\$(conda shell.bash hook)\"" >> ~/.bashrc
+# Run everything as root
+USER root
+WORKDIR /root
