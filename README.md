@@ -1,4 +1,7 @@
 # Custom Jupyter Docker image with CUDA
+This is from
+[the official jupyter image](https://github.com/jupyter/docker-stacks)
+
 The base image is nvidia/cuda:11.8.0-devel-ubuntu22.04
 
 You can modify the base in the Dockerfile.base2
