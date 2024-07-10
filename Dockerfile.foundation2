@@ -94,7 +94,7 @@ COPY run-hooks.sh start.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/run-hooks.sh /usr/local/bin/start.sh
 
 # Set container entrypoint
-ENTRYPOINT ["tini", "-g", "--", "start.sh"]
+ENTRYPOINT ["tini", "-g", "--", "bash", "/usr/local/bin/start.sh"]
     
 # Setup directories for any startup hooks
 RUN mkdir /usr/local/bin/start-notebook.d && \
